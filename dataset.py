@@ -32,7 +32,7 @@ class VideoDataset(Dataset):
         self.fnames, labels = [], []
         for label in sorted(os.listdir(folder)):
             if mode == 'train':
-                for fname in os.listdir(os.path.join(folder, label))[:]:
+                for fname in os.listdir(os.path.join(folder, label))[:-10]:
                     self.fnames.append(os.path.join(folder, label, fname))
                     labels.append(label)
             elif mode == "val":
@@ -64,8 +64,7 @@ class VideoDataset(Dataset):
         # frame_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
         # create a buffer. Must have dtype float, so it gets converted to a FloatTensor by Pytorch later
         buffer = []
-        #start = np.random.randint(frame_count-16)
-        #end = np.random.randint(frame_count-16-start)
+
         count = 0
         retaining = True
         sampling = np.linspace(0, frame_count-1, num=n_frame, dtype=int)
