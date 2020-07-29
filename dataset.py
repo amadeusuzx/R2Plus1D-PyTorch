@@ -1,10 +1,10 @@
 import os
 from pathlib import Path
-
+import numpy as np
 import cv2
 import numpy as np
 from torch.utils.data import DataLoader, Dataset
-
+from PIL import Image
 
 class VideoDataset(Dataset):
     r"""A Dataset for a folder of videos. Expects the directory structure to be
@@ -18,24 +18,27 @@ class VideoDataset(Dataset):
             clip_len (int, optional): Determines how many frames are there in each clip. Defaults to 8. 
         """
 
-    def __init__(self, directory, mode='train', clip_len=8):
-        folder = Path(directory)/mode  # get the directory of the specified split
-
+    def __init__(self, directory, mode='train', clip_len=8,transforms=None):
+        folder = Path(directory)  # get the directory of the specified split
+        self.transforms = transforms
         self.clip_len = clip_len
 
         # the following three parameters are chosen as described in the paper section 4.1
-        self.resize_height = 128  
-        self.resize_width = 171
-        self.crop_size = 112
-
+        #self.resize_height = 30
+        #self.resize_width = 60
+        #self.crop_size = 80
         # obtain all the filenames of files inside all the class folders 
         # going through each class folder one at a time
         self.fnames, labels = [], []
         for label in sorted(os.listdir(folder)):
-            for fname in os.listdir(os.path.join(folder, label)):
-                self.fnames.append(os.path.join(folder, label, fname))
-                labels.append(label)     
-
+            if mode == 'train':
+                for fname in os.listdir(os.path.join(folder, label))[:]:
+                    self.fnames.append(os.path.join(folder, label, fname))
+                    labels.append(label)
+            elif mode == "val":
+                for fname in os.listdir(os.path.join(folder, label))[-10:]:
+                    self.fnames.append(os.path.join(folder, label, fname))
+                    labels.append(label)  
         # prepare a mapping between the label names (strings) and indices (ints)
         self.label2index = {label:index for index, label in enumerate(sorted(set(labels)))} 
         # convert the list of label names into an array of label indices
@@ -44,44 +47,38 @@ class VideoDataset(Dataset):
     def __getitem__(self, index):
         # loading and preprocessing. TODO move them to transform classes
         buffer = self.loadvideo(self.fnames[index])
-        buffer = self.crop(buffer, self.clip_len, self.crop_size)
+        if self.transforms:
+            buffer = self.transforms(buffer)
+        #buffer = self.crop(buffer, self.clip_len, self.crop_size)
         buffer = self.normalize(buffer)
 
         return buffer, self.label_array[index]    
         
         
 
-    def loadvideo(self, fname):
+    def loadvideo(self, fname, n_frame=20):
         # initialize a VideoCapture object to read video data into a numpy array
         capture = cv2.VideoCapture(fname)
         frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
-        frame_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
-        frame_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        # frame_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+        # frame_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
         # create a buffer. Must have dtype float, so it gets converted to a FloatTensor by Pytorch later
-        buffer = np.empty((frame_count, self.resize_height, self.resize_width, 3), np.dtype('float32'))
-
+        buffer = []
+        #start = np.random.randint(frame_count-16)
+        #end = np.random.randint(frame_count-16-start)
         count = 0
         retaining = True
-
+        sampling = np.linspace(0, frame_count-1, num=n_frame, dtype=int)
         # read in each frame, one at a time into the numpy buffer array
         while (count < frame_count and retaining):
             retaining, frame = capture.read()
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            # will resize frames if not already final size
-            # NOTE: strongly recommended to resize them during the download process. This script
-            # will process videos of any size, but will take longer the larger the video file.
-            if (frame_height != self.resize_height) or (frame_width != self.resize_width):
-                frame = cv2.resize(frame, (self.resize_width, self.resize_height))
-            buffer[count] = frame
+            if count in sampling:
+                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                frame = Image.fromarray(frame, 'RGB')
+                buffer.append(frame)
             count += 1
 
-        # release the VideoCapture once it is no longer needed
         capture.release()
-
-        # convert from [D, H, W, C] format to [C, D, H, W] (what PyTorch uses)
-        # D = Depth (in this case, time), H = Height, W = Width, C = Channels
-        buffer = buffer.transpose((3, 0, 1, 2))
-
         return buffer 
     
     def crop(self, buffer, clip_len, crop_size):
@@ -105,7 +102,13 @@ class VideoDataset(Dataset):
         # NOTE: Default values of RGB images normalization are used, as precomputed 
         # mean and std_dev values (akin to ImageNet) were unavailable for Kinetics. Feel 
         # free to push to and edit this section to replace them if found. 
-        buffer = (buffer - 128)/128
+        new_buffer = []
+        for b in buffer:
+            new_buffer.append(np.array(b))
+        buffer = np.stack(new_buffer)
+        buffer = buffer.astype("float32")
+        buffer = buffer.transpose((3, 0, 1, 2))
+        buffer = (buffer - np.mean(buffer))/np.std(buffer)
         return buffer
 
     def __len__(self):
@@ -132,6 +135,7 @@ class VideoDataset1M(VideoDataset):
         # index being used multiple times, it'll be randomly cropped, and
         # be temporally jitterred differently on each pass, properly
         # augmenting the data. 
+        
         index = np.random.randint(len(self.fnames))
 
         buffer = self.loadvideo(self.fnames[index])
